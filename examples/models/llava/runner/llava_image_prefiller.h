@@ -29,28 +29,77 @@ class ET_EXPERIMENTAL LlavaImagePrefiller
   inline ::executorch::runtime::Result<exec_aten::Tensor> prefill(
       ::executorch::extension::llm::Image& image,
       int64_t& start_pos) override {
+    // First verify methods are loaded
+    ET_CHECK_MSG(
+        module_->is_method_loaded(kImageEncoderMethod),
+        "Image encoder method not loaded");
+    ET_CHECK_MSG(
+        module_->is_method_loaded(kTextModelMethod),
+        "Text model method not loaded");
+
+    // Log available methods for debugging
+    auto methods_res = module_->method_names();
+    if (methods_res.ok()) {
+        for (const auto& method : methods_res.get()) {
+            ET_LOG(Info, "Available method: %s", method.c_str());
+        }
+    }
+
+    // Create image tensor with proper ownership
+    std::vector<uint8_t> image_data_copy(image.data);
     auto image_tensor = executorch::extension::from_blob(
-        image.data.data(),
+        image_data_copy.data(),
         {3, image.height, image.width},
         ::executorch::aten::ScalarType::Byte);
-    // Run image encoder
+
+    ET_LOG(Info, "Executing image encoder");
     auto image_encoder_outputs =
         ET_UNWRAP(module_->execute(kImageEncoderMethod, image_tensor));
+    ET_LOG(Info, "Image encoder execution complete");
 
-    // inputs:[start_pos, embeds]
+    ET_CHECK_MSG(
+        !image_encoder_outputs.empty() && image_encoder_outputs[0].isTensor(),
+        "Invalid output from image encoder");
+        
+    // Log image encoder output shape
+    auto& image_embeds = image_encoder_outputs[0].toTensor();
+    ET_LOG(Info, "Image encoder output shape: [%ld, %ld, %ld]", 
+           image_embeds.size(0), image_embeds.size(1), image_embeds.size(2));
+
+    // Get embedding length and validate against cache size
+    int64_t embedding_length = image_embeds.size(1);
+    constexpr int64_t MAX_CACHE_SIZE = 768;  // From the error message
+    
+    ET_CHECK_MSG(
+        embedding_length < MAX_CACHE_SIZE,
+        "Image embedding length (%ld) exceeds max cache size (%ld)",
+        embedding_length, MAX_CACHE_SIZE);
+    
+    ET_LOG(Info, "Image embedding length: %ld", embedding_length);
+    
+    // Always start from position 0 for text model to process the entire sequence
+    int64_t text_start_pos = 0;
+    ET_LOG(Info, "Text model will start at position: %ld", text_start_pos);
+
+    // Create start_pos tensor with position 0
+    std::vector<int64_t> start_pos_data = {text_start_pos};
     auto start_pos_tensor = executorch::extension::from_blob(
-        &start_pos, {1}, ::executorch::aten::ScalarType::Long);
+        start_pos_data.data(),
+        {1},
+        ::executorch::aten::ScalarType::Long);
 
-    // Run text model
+    ET_LOG(Info, "Executing text model with start_pos: %ld", text_start_pos);
     auto outputs_res = ET_UNWRAP(module_->execute(
         kTextModelMethod, {start_pos_tensor, image_encoder_outputs[0]}));
+    ET_LOG(Info, "Text model execution complete");
+
     ET_CHECK_MSG(
         outputs_res[0].isTensor(),
         "Non Tensor Output returned from executing image prefill");
 
-    // Update the start_pos, which is only available inside this function.
-    // outputs_res can have only one logits.
-    start_pos += image_encoder_outputs[0].toTensor().size(1);
+    // Update start_pos to the length of processed embeddings
+    start_pos = embedding_length;
+    ET_LOG(Info, "Updated start_pos to: %ld", start_pos);
 
     return outputs_res[0].toTensor();
   }
