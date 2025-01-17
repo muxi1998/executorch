@@ -26,13 +26,30 @@ class ET_EXPERIMENTAL LlavaTextDecoderRunner
   inline executorch::runtime::Result<exec_aten::Tensor> step(
       executorch::extension::TensorPtr& tokens,
       executorch::extension::TensorPtr& start_pos) override {
+    ET_LOG(Info, "=== LlavaTextDecoderRunner Step called ===");
+    // print the tokens address
+    ET_LOG(Info, "Tokens address: %p", &tokens);
+    // print the start_pos address
+    ET_LOG(Info, "Start pos address: %p", &start_pos);
+
     // run token embedding
     auto token_embedding_outputs =
         ET_UNWRAP(module_->execute(kTokenEmbeddingMethod, tokens));
 
+    // print the token_embedding_outputs address
+    ET_LOG(Info, "Token embedding outputs address: %p", &token_embedding_outputs);
+
     // run text model
     auto outputs_res = ET_UNWRAP(module_->execute(
         kTextModelMethod, {start_pos, token_embedding_outputs[0]}));
+
+    // print the outputs_res address
+    ET_LOG(Info, "Outputs res address: %p", &outputs_res);
+
+    // print the outputs_res[0] address
+    ET_LOG(Info, "Outputs res[0] address: %p", &outputs_res[0]);
+    // print the outputs_res[0].isTensor() address
+    ET_LOG(Info, "Outputs res[0].toTensor() address: %p", &outputs_res[0].toTensor());
 
     ET_CHECK_MSG(
         outputs_res.size() == 1,
